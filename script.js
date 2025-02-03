@@ -244,6 +244,7 @@ async function createGame() {
         
         // Start streaming the game
         startGameStream();
+        showGameControls();
     } catch (error) {
         console.error('Error creating game:', error);
         statusElement.textContent = `Error creating game: ${error.message}`;
@@ -375,6 +376,73 @@ async function startGameStream() {
         console.error('Game stream error:', error);
         statusElement.textContent = `Error streaming game: ${error.message}`;
     }
+}
+
+// Add forfeit functionality
+const forfeitButton = document.getElementById('forfeit-button');
+forfeitButton.style.display = 'none'; // Hide initially
+
+function forfeitGame() {
+    if (!gameId) return;
+    
+    fetch(`https://lichess.org/api/challenge/${gameId}/cancel`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${config.apiToken}`,
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => {
+        if (response.ok) {
+            document.getElementById('game-status').textContent = 'Game forfeited';
+            forfeitButton.disabled = true;
+            game = new Chess(); // Reset the game
+            updateBoard();
+            gameId = null; // Reset game ID
+            
+            // Show difficulty popup again
+            const popup = document.getElementById('difficulty-popup');
+            popup.style.display = 'block';
+        } else {
+            // Try alternative endpoint for ongoing games
+            return fetch(`https://lichess.org/api/board/game/${gameId}/resign`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${config.apiToken}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+        }
+    })
+    .then(response => {
+        if (response && response.ok) {
+            document.getElementById('game-status').textContent = 'Game forfeited';
+            forfeitButton.disabled = true;
+            game = new Chess(); // Reset the game
+            updateBoard();
+            gameId = null; // Reset game ID
+            
+            // Show difficulty popup again
+            const popup = document.getElementById('difficulty-popup');
+            popup.style.display = 'block';
+        } else if (response) {
+            console.error('Failed to forfeit game');
+            document.getElementById('game-status').textContent = 'Failed to forfeit game';
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        document.getElementById('game-status').textContent = 'Error forfeiting game';
+    });
+}
+
+// Add click handler for forfeit button
+forfeitButton.addEventListener('click', forfeitGame);
+
+// Show forfeit button when game starts
+function showGameControls() {
+    forfeitButton.style.display = 'block';
+    forfeitButton.disabled = false;
 }
 
 // Initialize the game
