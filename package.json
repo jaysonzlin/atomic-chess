@@ -1,0 +1,17 @@
+{
+  "name": "atomic-chess",
+  "version": "1.0.0",
+  "description": "Atomic chess game implementation",
+  "main": "script.js",
+  "scripts": {
+    "test": "jest"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0"
+  },
+  "jest": {
+    "testEnvironment": "jsdom",
+    "setupFiles": ["./tests/setup.js"]
+  }
+}

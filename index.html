@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Atomic Chess</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="difficulty-popup" class="popup">
+        <div class="popup-content">
+            <h2>Select Bot Difficulty</h2>
+            <div class="difficulty-selector">
+                <label for="difficulty">Difficulty Level (1-8):</label>
+                <input type="number" id="difficulty" min="1" max="8" value="3">
+            </div>
+            <button id="start-game">Play Game</button>
+        </div>
+    </div>
+    <h1>Atomic Chess</h1>
+    <div id="game-status">Waiting for game to start...</div>
+    <div id="instructions">
+        <p>Click on a piece to select it, then click on a destination square to make a move.</p>
+        <p>In Atomic chess, captures cause an explosion that removes both pieces and surrounding pieces (excluding non-attacking and non-attacked pawns)!</p>
+    </div>
+    <div id="board"></div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.js"></script>
+    <script src="config.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
