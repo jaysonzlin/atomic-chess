@@ -6,6 +6,21 @@ let selectedSquare;
 let game = new Chess(); // Initialize chess.js
 let level = 3; // Default Stockfish level
 let explodedSquares = new Set(); // Track exploded squares
+let apiToken = localStorage.getItem('lichessApiToken');
+
+// Function to get API token
+async function getApiToken() {
+    if (!apiToken) {
+        apiToken = prompt('Please enter your Lichess API token. You can get one from https://lichess.org/account/oauth/token');
+        if (apiToken) {
+            localStorage.setItem('lichessApiToken', apiToken);
+        } else {
+            document.getElementById('game-status').textContent = 'API token is required to play';
+            return null;
+        }
+    }
+    return apiToken;
+}
 
 // Piece image paths
 const pieceImages = {
@@ -195,10 +210,13 @@ async function makeMove(move) {
     }
 
     try {
+        const token = await getApiToken();
+        if (!token) return;
+
         const response = await fetch(`https://lichess.org/api/board/game/${gameId}/move/${move}`, {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${config.apiToken}`
+                'Authorization': `Bearer ${token}`
             }
         });
 
@@ -216,29 +234,28 @@ async function makeMove(move) {
 
 // Lichess API integration
 async function createGame() {
+    const token = await getApiToken();
+    if (!token) return;
+
+    const statusElement = document.getElementById('game-status');
+    statusElement.textContent = 'Creating game...';
+
     try {
-        // Challenge the Lichess bot
-        const challengeResponse = await fetch('https://lichess.org/api/challenge/ai', {
+        const response = await fetch('https://lichess.org/api/challenge/ai', {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${config.apiToken}`,
-                'Content-Type': 'application/x-www-form-urlencoded'
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Authorization': `Bearer ${token}`
             },
-            body: new URLSearchParams({
-                'level': level, // Stockfish level
-                'clock.limit': '600', // 10 minutes
-                'clock.increment': '0',
-                'variant': 'atomic',
-                'color': 'white' // Play as white
-            })
+            body: `level=${level}&clock.limit=600&clock.increment=0&variant=atomic&color=white`
         });
 
-        if (!challengeResponse.ok) {
-            const errorData = await challengeResponse.text();
+        if (!response.ok) {
+            const errorData = await response.text();
             throw new Error(`Failed to create bot game: ${errorData}`);
         }
 
-        const data = await challengeResponse.json();
+        const data = await response.json();
         gameId = data.id;
         statusElement.textContent = `Game started against Stockfish (Level ${level})! ID: ${gameId}`;
         
@@ -253,187 +270,131 @@ async function createGame() {
 
 // Stream game state
 async function startGameStream() {
-    if (!gameId) {
-        console.error('No game ID available');
-        return;
-    }
+    if (!gameId) return;
 
     try {
+        const token = await getApiToken();
+        if (!token) return;
+
         const response = await fetch(`https://lichess.org/api/board/game/stream/${gameId}`, {
             headers: {
-                'Authorization': `Bearer ${config.apiToken}`
+                'Authorization': `Bearer ${token}`
             }
         });
 
         if (!response.ok) {
-            throw new Error(`Stream error! status: ${response.status}`);
+            throw new Error(`HTTP error! status: ${response.status}`);
         }
 
         const reader = response.body.getReader();
-        let lastMoves = '';
-        let currentPosition = game.fen();
-        let pendingAnimations = new Set();
+        const decoder = new TextDecoder();
 
         while (true) {
-            const {value, done} = await reader.read();
+            const { value, done } = await reader.read();
             if (done) break;
 
-            const text = new TextDecoder().decode(value);
-            const lines = text.split('\n');
+            const events = decoder.decode(value)
+                .split('\n')
+                .filter(line => line.trim())
+                .map(line => JSON.parse(line));
 
-            for (const line of lines) {
-                if (!line.trim()) continue;
-
-                try {
-                    const event = JSON.parse(line);
-                    if (event.type === 'gameFull') {
-                        // Initial game state
-                        const initialState = event.state;
-                        game.reset();
-                        if (initialState.moves) {
-                            const moves = initialState.moves.split(' ');
-                            for (const move of moves) {
-                                if (move) game.move(move, {sloppy: true});
-                            }
-                        }
-                        currentPosition = game.fen();
-                        updateBoard();
-                    } else if (event.type === 'gameState') {
-                        // Update from new moves
-                        if (event.moves && event.moves !== lastMoves) {
-                            const moves = event.moves.split(' ');
-                            const newMove = moves[moves.length - 1];
-                            
-                            // Wait for any pending animations to complete
-                            if (pendingAnimations.size > 0) {
-                                await new Promise(resolve => setTimeout(resolve, 500));
-                                pendingAnimations.clear();
-                            }
-                            
-                            // Reset to last known good position
-                            game.load(currentPosition);
-                            
-                            // Apply the new move
-                            const moveResult = game.move(newMove, {sloppy: true});
-                            if (!moveResult) {
-                                console.error('Failed to make move:', newMove);
-                                continue;
-                            }
-                            
-                            if (moveResult.captured) {
-                                // Show explosion only on captured piece
-                                const targetCol = moveResult.to.charCodeAt(0) - 'a'.charCodeAt(0);
-                                const targetRow = parseInt(moveResult.to[1]);
-                                showExplosion(targetCol, targetRow);
-                                pendingAnimations.add(`${targetCol},${targetRow}`);
-                                
-                                // Handle atomic explosion (but don't show animation)
-                                handleExplosion(moveResult, false);
-                                
-                                // Delay the final board update and game end status
-                                setTimeout(() => {
-                                    pendingAnimations.delete(`${targetCol},${targetRow}`);
-                                    currentPosition = game.fen();
-                                    updateBoard();
-                                    // Update game status
-                                    if (event.status === 'mate') {
-                                        statusElement.textContent = 'Checkmate! Game Over';
-                                    } else if (event.status === 'draw') {
-                                        statusElement.textContent = 'Game Draw!';
-                                    } else if (event.winner) {
-                                        statusElement.textContent = `Game Over! ${event.winner === 'white' ? 'White' : 'Black'} wins!`;
-                                    }
-                                }, 500); // Match explosion animation duration
-                            } else {
-                                // For non-capture moves, update immediately
-                                currentPosition = game.fen();
-                                updateBoard();
-                                
-                                // Update game status
-                                if (event.status === 'mate') {
-                                    statusElement.textContent = 'Checkmate! Game Over';
-                                } else if (event.status === 'draw') {
-                                    statusElement.textContent = 'Game Draw!';
-                                } else if (event.winner) {
-                                    statusElement.textContent = `Game Over! ${event.winner === 'white' ? 'White' : 'Black'} wins!`;
-                                } else {
-                                    // Show whose turn it is
-                                    const moveCount = moves.length;
-                                    const isWhiteTurn = moveCount % 2 === 0;
-                                    statusElement.textContent = `${isWhiteTurn ? 'White' : 'Black'} to move`;
-                                }
-                            }
-                            lastMoves = event.moves;
-                        }
-                    }
-                } catch (e) {
-                    console.warn('Failed to parse game state:', e);
-                    continue;
+            for (const event of events) {
+                if (event.type === 'gameState') {
+                    handleGameState(event);
+                } else if (event.type === 'gameFinish') {
+                    handleGameFinish(event);
                 }
             }
         }
     } catch (error) {
-        console.error('Game stream error:', error);
-        statusElement.textContent = `Error streaming game: ${error.message}`;
+        console.error('Error in game stream:', error);
+        document.getElementById('game-status').textContent = 'Error: Lost connection to game';
     }
+}
+
+function handleGameState(event) {
+    // Update game state
+    if (event.status === 'resign' || event.status === 'aborted') {
+        handleGameFinish(event);
+        return;
+    }
+
+    // Update the board with the new moves
+    if (event.moves) {
+        const moves = event.moves.split(' ');
+        game = new Chess();
+        moves.forEach(move => game.move(move, { sloppy: true }));
+        updateBoard();
+    }
+}
+
+function handleGameFinish(event) {
+    const statusElement = document.getElementById('game-status');
+    statusElement.textContent = `Game ended: ${event.status || 'Unknown reason'}`;
+    forfeitButton.disabled = true;
+    gameId = null;
+    
+    // Show difficulty popup again
+    const popup = document.getElementById('difficulty-popup');
+    popup.style.display = 'block';
 }
 
 // Add forfeit functionality
 const forfeitButton = document.getElementById('forfeit-button');
 forfeitButton.style.display = 'none'; // Hide initially
 
-function forfeitGame() {
-    if (!gameId) return;
+async function forfeitGame() {
+    if (!gameId || !apiToken) return;
     
-    fetch(`https://lichess.org/api/challenge/${gameId}/cancel`, {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${config.apiToken}`,
-            'Content-Type': 'application/json'
+    const statusElement = document.getElementById('game-status');
+    statusElement.textContent = 'Attempting to forfeit game...';
+
+    try {
+        // Try to resign the game first
+        const resignResponse = await fetch(`https://lichess.org/api/board/game/${gameId}/resign`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${apiToken}`
+            }
+        });
+
+        if (resignResponse.ok) {
+            handleForfeitSuccess();
+            return;
         }
-    })
-    .then(response => {
-        if (response.ok) {
-            document.getElementById('game-status').textContent = 'Game forfeited';
-            forfeitButton.disabled = true;
-            game = new Chess(); // Reset the game
-            updateBoard();
-            gameId = null; // Reset game ID
-            
-            // Show difficulty popup again
-            const popup = document.getElementById('difficulty-popup');
-            popup.style.display = 'block';
-        } else {
-            // Try alternative endpoint for ongoing games
-            return fetch(`https://lichess.org/api/board/game/${gameId}/resign`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${config.apiToken}`,
-                    'Content-Type': 'application/json'
-                }
-            });
+
+        // If resign fails, try to cancel the challenge
+        const cancelResponse = await fetch(`https://lichess.org/api/challenge/${gameId}/cancel`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${apiToken}`
+            }
+        });
+
+        if (cancelResponse.ok) {
+            handleForfeitSuccess();
+            return;
         }
-    })
-    .then(response => {
-        if (response && response.ok) {
-            document.getElementById('game-status').textContent = 'Game forfeited';
-            forfeitButton.disabled = true;
-            game = new Chess(); // Reset the game
-            updateBoard();
-            gameId = null; // Reset game ID
-            
-            // Show difficulty popup again
-            const popup = document.getElementById('difficulty-popup');
-            popup.style.display = 'block';
-        } else if (response) {
-            console.error('Failed to forfeit game');
-            document.getElementById('game-status').textContent = 'Failed to forfeit game';
-        }
-    })
-    .catch(error => {
-        console.error('Error:', error);
-        document.getElementById('game-status').textContent = 'Error forfeiting game';
-    });
+
+        // If both attempts fail
+        statusElement.textContent = 'Failed to forfeit game. Please try again.';
+    } catch (error) {
+        console.error('Error forfeiting game:', error);
+        statusElement.textContent = 'Error forfeiting game. Please try again.';
+    }
+}
+
+function handleForfeitSuccess() {
+    const statusElement = document.getElementById('game-status');
+    statusElement.textContent = 'Game forfeited successfully';
+    forfeitButton.disabled = true;
+    game = new Chess();
+    updateBoard();
+    gameId = null;
+    
+    // Show difficulty popup again
+    const popup = document.getElementById('difficulty-popup');
+    popup.style.display = 'block';
 }
 
 // Add click handler for forfeit button

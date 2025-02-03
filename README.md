@@ -44,17 +44,15 @@ cd windsurf-project
 npm install
 ```
 
-3. **Set up Lichess API Token**
+3. **Get Lichess API Token**
 - Create a Lichess account at [lichess.org](https://lichess.org)
 - Go to [Preferences > API Access Tokens](https://lichess.org/account/oauth/token)
 - Create a new token with the following scopes:
   - `bot:play`
   - `challenge:write`
   - `board:play`
-- Copy your token and replace the placeholder in `config.js`:
-```javascript
-const LICHESS_TOKEN = 'your_token_here';
-```
+- Keep your token handy - you'll be prompted to enter it when you start the game
+- The token will be securely stored in your browser's localStorage for future games
 
 4. **Run Tests**
 ```bash
@@ -63,6 +61,7 @@ npm test
 
 5. **Start the Game**
 - Open `index.html` in your web browser
+- When prompted, enter your Lichess API token
 - Select difficulty level (1-8)
 - Click "Play Game" to start
 - Make moves by clicking pieces and their destinations
