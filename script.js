@@ -149,7 +149,6 @@ function handleExplosion(moveResult, showAnimation = true) {
     // Add the capture square
     explosionSquares.push({row: targetRow, col: targetCol});
 
-    
     // Add all adjacent squares
     for (let i = -1; i <= 1; i++) {
         for (let j = -1; j <= 1; j++) {
@@ -187,8 +186,8 @@ function handleExplosion(moveResult, showAnimation = true) {
 
 // Show explosion animation
 function showExplosion(col, row) {
-    // Convert chess coordinates to board array index
-    const index = (8 - row) * 8 + col;
+    // Convert board coordinates (0-indexed) to board array index
+    const index = row * 8 + col;
     const square = boardElement.children[index];
     const explosion = document.createElement('div');
     explosion.classList.add('explosion');
@@ -288,6 +287,9 @@ async function startGameStream() {
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
+        let lastMoves = '';
+        let currentPosition = game.fen();
+        let pendingAnimations = new Set();
 
         while (true) {
             const { value, done } = await reader.read();
@@ -299,10 +301,89 @@ async function startGameStream() {
                 .map(line => JSON.parse(line));
 
             for (const event of events) {
-                if (event.type === 'gameState') {
-                    handleGameState(event);
-                } else if (event.type === 'gameFinish') {
-                    handleGameFinish(event);
+                console.log('Game event:', event); // Debug log
+                if (event.type === 'gameFull') {
+                    // Initial game state
+                    const initialState = event.state;
+                    game.reset();
+                    if (initialState.moves) {
+                        const moves = initialState.moves.split(' ');
+                        for (const move of moves) {
+                            if (move) game.move(move, {sloppy: true});
+                        }
+                    }
+                    currentPosition = game.fen();
+                    updateBoard();
+                } else if (event.type === 'gameState') {
+                    console.log('Game state event:', {
+                        status: event.status,
+                        winner: event.winner,
+                        moves: event.moves
+                    }); // Debug log
+                    
+                    // Update from new moves
+                    if (event.moves && event.moves !== lastMoves) {
+                        const moves = event.moves.split(' ');
+                        const newMove = moves[moves.length - 1];
+                        
+                        // Wait for any pending animations to complete
+                        if (pendingAnimations.size > 0) {
+                            await new Promise(resolve => setTimeout(resolve, 500));
+                            pendingAnimations.clear();
+                        }
+                        
+                        // Reset to last known good position
+                        game.load(currentPosition);
+                        
+                        // Apply the new move
+                        const moveResult = game.move(newMove, {sloppy: true});
+                        if (!moveResult) {
+                            console.error('Failed to make move:', newMove);
+                            continue;
+                        }
+                        
+                        if (moveResult.captured) {
+                            handleExplosion(moveResult);
+                            pendingAnimations.add(`${moveResult.to}`);
+                            
+                            // Delay the final board update
+                            setTimeout(() => {
+                                pendingAnimations.delete(`${moveResult.to}`);
+                                currentPosition = game.fen();
+                                updateBoard();
+                            }, 500);
+                        } else {
+                            currentPosition = game.fen();
+                            updateBoard();
+                        }
+                        
+                        lastMoves = event.moves;
+                    }
+                    
+                    // Update game status
+                    const statusElement = document.getElementById('game-status');
+                    if (event.status === 'mate' || event.winner || event.status === 'resign' || event.status === 'stalemate') {
+                        console.log('Game end condition detected:', {
+                            status: event.status,
+                            winner: event.winner
+                        }); // Debug log
+                        if (event.winner) {
+                            statusElement.textContent = `Game Over! ${event.winner === 'white' ? 'White' : 'Black'} wins!`;
+                        } else if (event.status === 'stalemate') {
+                            statusElement.textContent = 'Game Over! Stalemate';
+                        } else {
+                            statusElement.textContent = 'Checkmate! Game Over';
+                        }
+                        // Disable forfeit button
+                        forfeitButton.disabled = true;
+                    } else if (event.status === 'draw') {
+                        statusElement.textContent = 'Game Draw!';
+                        forfeitButton.disabled = true;
+                    } else if (event.moves) {
+                        const moves = event.moves.split(' ');
+                        const isWhiteTurn = moves.length % 2 === 0;
+                        statusElement.textContent = `${isWhiteTurn ? 'White' : 'Black'} to move`;
+                    }
                 }
             }
         }
@@ -322,21 +403,70 @@ function handleGameState(event) {
     // Update the board with the new moves
     if (event.moves) {
         const moves = event.moves.split(' ');
+        const lastPosition = game.fen(); // Store last position
         game = new Chess();
-        moves.forEach(move => game.move(move, { sloppy: true }));
-        updateBoard();
+
+        // Apply all moves except the last one
+        for (let i = 0; i < moves.length - 1; i++) {
+            game.move(moves[i], { sloppy: true });
+        }
+
+        // Apply the last move separately to check for captures
+        if (moves.length > 0) {
+            const lastMove = moves[moves.length - 1];
+            const moveResult = game.move(lastMove, { sloppy: true });
+
+            if (moveResult && moveResult.captured) {
+                // Show explosion animation
+                const targetCol = moveResult.to.charCodeAt(0) - 'a'.charCodeAt(0);
+                const targetRow = 8 - parseInt(moveResult.to[1]);
+                showExplosion(targetCol, targetRow);
+
+                // Handle atomic explosion
+                const explosionSquares = handleExplosion(moveResult);
+                
+                // Update the board after a short delay to show explosion
+                setTimeout(() => {
+                    updateBoard();
+                }, 500);
+            } else {
+                updateBoard();
+            }
+        }
+    }
+
+    // Update game status
+    const statusElement = document.getElementById('game-status');
+    if (event.status === 'variantEnd') {
+        if (event.winner) {
+            statusElement.textContent = `Game Over! ${event.winner === 'white' ? 'White' : 'Black'} wins!`;
+            forfeitButton.disabled = true;
+        }
+    } else if (event.status === 'draw') {
+        statusElement.textContent = 'Game Draw!';
+        forfeitButton.disabled = true;
+    } else if (event.moves) {
+        const moves = event.moves.split(' ');
+        const isWhiteTurn = moves.length % 2 === 0;
+        statusElement.textContent = `${isWhiteTurn ? 'White' : 'Black'} to move`;
     }
 }
 
 function handleGameFinish(event) {
     const statusElement = document.getElementById('game-status');
-    statusElement.textContent = `Game ended: ${event.status || 'Unknown reason'}`;
-    forfeitButton.disabled = true;
-    gameId = null;
+    if (event.status === 'variantEnd') {
+        statusElement.textContent = `Game Over! ${event.winner === 'white' ? 'White' : 'Black'} wins!`;
+    } else if (event.status === 'draw') {
+        statusElement.textContent = 'Game Draw!';
+    } else if (event.status === 'resign') {
+        const winner = event.winner === 'white' ? 'White' : 'Black';
+        statusElement.textContent = `Game Over! ${winner} wins by resignation!`;
+    } else if (event.status === 'aborted') {
+        statusElement.textContent = 'Game Aborted';
+    }
     
-    // Show difficulty popup again
-    const popup = document.getElementById('difficulty-popup');
-    popup.style.display = 'block';
+    // Disable forfeit button
+    forfeitButton.disabled = true;
 }
 
 // Add forfeit functionality
